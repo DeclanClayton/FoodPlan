@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: pantry-and-plan
+    runtime: node
+    plan: starter
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.1
+      - key: DB_PATH
+        value: /data/meals.db
+    disk:
+      name: pantry-data
+      mountPath: /data
+      sizeGB: 1
