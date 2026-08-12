@@ -19,6 +19,35 @@ export default function Home() {
       .finally(() => setLoading(false));
   }, []);
 
+  function mealMacros(meal) {
+    const totals = meal.ingredients.reduce(
+      (acc, ing) => ({
+        calories: acc.calories + (Number(ing.calories) || 0),
+        protein: acc.protein + (Number(ing.protein) || 0),
+        fat: acc.fat + (Number(ing.fat) || 0),
+      }),
+      { calories: 0, protein: 0, fat: 0 }
+    );
+    return totals.calories > 0 || totals.protein > 0 || totals.fat > 0 ? totals : null;
+  }
+
+  const selectedMacros = useMemo(() => {
+    return meals
+      .filter((m) => selected.has(m.id))
+      .reduce(
+        (acc, m) => {
+          const macros = mealMacros(m);
+          if (!macros) return acc;
+          return {
+            calories: acc.calories + macros.calories,
+            protein: acc.protein + macros.protein,
+            fat: acc.fat + macros.fat,
+          };
+        },
+        { calories: 0, protein: 0, fat: 0 }
+      );
+  }, [meals, selected]);
+
   const grouped = useMemo(() => {
     const map = new Map();
     for (const meal of meals) {
@@ -113,7 +142,14 @@ export default function Home() {
                         {isSelected && '✓'}
                       </span>
                       <span className="meal-info">
-                        <span className="meal-name">{meal.name}</span>
+                        <span className="meal-name-row">
+                          <span className="meal-name">{meal.name}</span>
+                          {mealMacros(meal) && (
+                            <span className="meal-cals">
+                              {Math.round(mealMacros(meal).calories)} kcal
+                            </span>
+                          )}
+                        </span>
                         {meal.description && (
                           <span className="meal-desc">{meal.description}</span>
                         )}
@@ -139,6 +175,14 @@ export default function Home() {
                                   {ing.quantity ? `${ing.quantity} ` : ''}
                                   {ing.unit ? `${ing.unit} ` : ''}
                                   {ing.name}
+                                  {(ing.calories || ing.protein || ing.fat) && (
+                                    <span className="ing-macros">
+                                      {' — '}
+                                      {ing.calories ? `${ing.calories} kcal` : ''}
+                                      {ing.protein ? `${ing.calories ? ', ' : ''}${ing.protein}g protein` : ''}
+                                      {ing.fat ? `${ing.calories || ing.protein ? ', ' : ''}${ing.fat}g fat` : ''}
+                                    </span>
+                                  )}
                                 </li>
                               ))}
                             </ul>
@@ -162,6 +206,14 @@ export default function Home() {
 
       {selected.size > 0 && (
         <div className="sticky-bar">
+          {selectedMacros.calories > 0 && (
+            <p className="selected-cals">
+              {Math.round(selectedMacros.calories)} kcal
+              {selectedMacros.protein > 0 ? ` · ${Math.round(selectedMacros.protein)}g protein` : ''}
+              {selectedMacros.fat > 0 ? ` · ${Math.round(selectedMacros.fat)}g fat` : ''}
+              {' '}for selected meals
+            </p>
+          )}
           <button type="button" className="primary-btn" onClick={buildList} disabled={listLoading}>
             {listLoading
               ? 'Building…'
