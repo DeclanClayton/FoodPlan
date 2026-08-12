@@ -33,6 +33,20 @@ function detectHeaderColumns(headerRow) {
   return map;
 }
 
+// Pulls a leading quantity + unit off an ingredient string like "200g Chicken breast"
+// or "1/2 cup Rice", leaving just the ingredient name. Falls back to no quantity/unit
+// if nothing matches.
+function splitQuantityFromName(raw) {
+  const text = (raw || '').trim();
+  const unitPattern =
+    'g|kg|mg|ml|l|tsp|tbsp|tbs|cup|cups|oz|lb|lbs|clove|cloves|slice|slices|piece|pieces|pinch|can|cans|tin|tins|bunch|stick|sticks|handful';
+  const match = text.match(new RegExp(`^([\\d.]+(?:\\/[\\d.]+)?)\\s*(${unitPattern})?\\s+(.+)$`, 'i'));
+  if (match) {
+    return { quantity: match[1], unit: match[2] || '', name: match[3] };
+  }
+  return { quantity: '', unit: '', name: text };
+}
+
 function parsePastedIngredients(text) {
   const lines = text
     .split('\n')
@@ -75,16 +89,24 @@ function parsePastedIngredients(text) {
     map.calories = 3;
   }
 
+  const noSeparateQtyUnit = map.quantity === undefined && map.unit === undefined;
+
   const ingredients = dataRows
     .filter((cols) => cols[map.name])
-    .map((cols) => ({
-      name: cols[map.name] || '',
-      quantity: map.quantity !== undefined ? cols[map.quantity] || '' : '',
-      unit: map.unit !== undefined ? cols[map.unit] || '' : '',
-      calories: map.calories !== undefined ? cols[map.calories] || '' : '',
-      protein: map.protein !== undefined ? cols[map.protein] || '' : '',
-      fat: map.fat !== undefined ? cols[map.fat] || '' : '',
-    }));
+    .map((cols) => {
+      const rawName = cols[map.name] || '';
+      const base = noSeparateQtyUnit
+        ? splitQuantityFromName(rawName)
+        : { quantity: map.quantity !== undefined ? cols[map.quantity] || '' : '', unit: map.unit !== undefined ? cols[map.unit] || '' : '', name: rawName };
+      return {
+        name: base.name,
+        quantity: base.quantity,
+        unit: base.unit,
+        calories: map.calories !== undefined ? cols[map.calories] || '' : '',
+        protein: map.protein !== undefined ? cols[map.protein] || '' : '',
+        fat: map.fat !== undefined ? cols[map.fat] || '' : '',
+      };
+    });
 
   return { mealName, ingredients };
 }
@@ -268,7 +290,9 @@ export default function Admin() {
             placeholder={
               'Paste a table from Word, Excel, or Google Sheets.\n\n' +
               'From a Word table like: [Dish Name] | Kcal | Protein | Fat\n' +
-              '(top-left cell becomes the meal name) — just paste it as-is.\n\n' +
+              '— top-left cell becomes the meal name, and if the ingredients\n' +
+              'cell has the amount in it too (e.g. "200g Chicken breast"),\n' +
+              'that gets split into quantity/unit/name automatically.\n\n' +
               'Or from a plain list, columns in order: Name, Quantity, Unit, Calories\n' +
               'e.g.\nChicken breast\t400\tg\t660'
             }
