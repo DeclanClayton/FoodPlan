@@ -47,68 +47,144 @@ function splitQuantityFromName(raw) {
   return { quantity: '', unit: '', name: text };
 }
 
+// A short line that's just a section divider inside a cell (e.g. "Sauce;", "For the sauce:")
+// rather than an actual ingredient.
+function isSectionLabel(line) {
+  return /[:;]\s*$/.test(line.trim());
+}
+
+// Word (and some spreadsheet paths) can flatten a table cell that contains several
+// ingredients typed as separate lines into plain text where a newline is used for BOTH
+// "next line within this cell" and "next row of the table" — those look identical once
+// pasted, so we can't tell them apart from newlines alone. What IS unambiguous is a real
+// tab character, which only ever appears between cells. So: walk the lines, and only move
+// to the next column when an actual tab is hit; a bare newline stays in the same column.
+// That reconstructs each column as its own list of lines (e.g. all the kcal values, in
+// order, as one list) even when they were typed as one ingredient per line inside a cell.
+function reconstructColumnsByTabs(bodyLines, numCols) {
+  const columns = Array.from({ length: numCols }, () => []);
+  let col = 0;
+  for (const line of bodyLines) {
+    const parts = line.split('\t');
+    parts.forEach((part, i) => {
+      columns[col].push(part);
+      if (i < parts.length - 1) col = (col + 1) % numCols;
+    });
+  }
+  return columns;
+}
+
 function parsePastedIngredients(text) {
-  const lines = text
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean);
-  if (lines.length === 0) return { mealName: null, ingredients: [] };
+  // Trim \r only here — trimming whole lines would strip a leading/trailing tab,
+  // which is exactly the signal we need to detect where one cell ends and the next begins.
+  const rawLines = text.replace(/\r\n?/g, '\n').split('\n');
+  const firstContentIdx = rawLines.findIndex((l) => l.trim() !== '');
+  if (firstContentIdx === -1) return { mealName: null, ingredients: [], note: null };
 
-  const rows = lines.map((line) => {
-    const delim = line.includes('\t') ? '\t' : ',';
-    return line.split(delim).map((cell) => cell.trim());
-  });
+  const headerCells = rawLines[firstContentIdx].split('\t').map((c) => c.trim());
+  const map = detectHeaderColumns(headerCells);
+  const headerRecognized = Object.keys(map).length > 0;
 
-  const header = rows[0];
-  const map = detectHeaderColumns(header);
-  const hasHeader =
-    map.calories !== undefined ||
-    map.protein !== undefined ||
-    map.fat !== undefined ||
-    map.quantity !== undefined ||
-    map.unit !== undefined ||
-    map.name !== undefined;
-
-  let dataRows = rows;
   let mealName = null;
+  let bodyLines;
+  let numCols;
 
-  if (hasHeader) {
-    dataRows = rows.slice(1);
+  if (headerRecognized) {
+    numCols = headerCells.length;
     if (map.name === undefined) {
       map.name = 0; // first column is always the ingredient name
-      const label = header[0];
+      const label = headerCells[0];
       // top-left cell wasn't a generic label like "Ingredients" — it's the dish name
       if (label && !/^(name|ingredient|ingredients)$/i.test(label)) {
         mealName = label;
       }
     }
+    bodyLines = rawLines.slice(firstContentIdx + 1);
   } else {
+    // No recognizable header — assume the plain Name, Quantity, Unit, Calories layout
+    // and treat every line (including this first one) as a data row.
     map.name = 0;
     map.quantity = 1;
     map.unit = 2;
     map.calories = 3;
+    numCols = 4;
+    bodyLines = rawLines.slice(firstContentIdx);
   }
 
-  const noSeparateQtyUnit = map.quantity === undefined && map.unit === undefined;
+  // Drop a trailing "Total ..." row if present — it's a summary, not an ingredient.
+  for (let i = bodyLines.length - 1; i >= 0; i--) {
+    if (bodyLines[i].trim() === '') continue;
+    if (/^total\b/i.test(bodyLines[i].trim())) bodyLines = bodyLines.slice(0, i);
+    break;
+  }
 
-  const ingredients = dataRows
-    .filter((cols) => cols[map.name])
-    .map((cols) => {
-      const rawName = cols[map.name] || '';
-      const base = noSeparateQtyUnit
-        ? splitQuantityFromName(rawName)
-        : { quantity: map.quantity !== undefined ? cols[map.quantity] || '' : '', unit: map.unit !== undefined ? cols[map.unit] || '' : '', name: rawName };
-      return {
-        name: base.name,
-        quantity: base.quantity,
-        unit: base.unit,
-        calories: map.calories !== undefined ? cols[map.calories] || '' : '',
-        protein: map.protein !== undefined ? cols[map.protein] || '' : '',
-        fat: map.fat !== undefined ? cols[map.fat] || '' : '',
-      };
+  const contentLines = bodyLines.filter((l) => l.trim() !== '');
+  const tabLineShare = contentLines.length
+    ? contentLines.filter((l) => l.includes('\t')).length / contentLines.length
+    : 0;
+  // Most lines have a tab -> a normal one-row-per-ingredient table/list.
+  const isRowPerLine = tabLineShare > 0.5;
+
+  if (isRowPerLine) {
+    const noSeparateQtyUnit = map.quantity === undefined && map.unit === undefined;
+    const ingredients = contentLines
+      .map((line) => line.split('\t').map((c) => c.trim()))
+      .filter((cols) => cols[map.name])
+      .map((cols) => {
+        const rawName = cols[map.name] || '';
+        const base = noSeparateQtyUnit
+          ? splitQuantityFromName(rawName)
+          : {
+              quantity: map.quantity !== undefined ? cols[map.quantity] || '' : '',
+              unit: map.unit !== undefined ? cols[map.unit] || '' : '',
+              name: rawName,
+            };
+        return {
+          name: base.name,
+          quantity: base.quantity,
+          unit: base.unit,
+          calories: map.calories !== undefined ? cols[map.calories] || '' : '',
+          protein: map.protein !== undefined ? cols[map.protein] || '' : '',
+          fat: map.fat !== undefined ? cols[map.fat] || '' : '',
+        };
+      });
+    return { mealName, ingredients, note: null };
+  }
+
+  // Otherwise: one "mega row" where each column is its own multi-line list (the shape
+  // Word produces when a cell contains several ingredients as separate paragraphs).
+  const columns = reconstructColumnsByTabs(bodyLines, numCols);
+
+  const nameLines = columns[map.name]
+    .map((l) => l.trim())
+    .filter((l) => l !== '' && !isSectionLabel(l));
+
+  const numericCols = {};
+  ['calories', 'protein', 'fat'].forEach((key) => {
+    if (map[key] !== undefined) {
+      numericCols[key] = columns[map[key]].map((l) => l.trim()).filter((l) => l !== '');
+    }
+  });
+
+  const ingredients = nameLines.map((rawName) => {
+    const base = splitQuantityFromName(rawName);
+    return { name: base.name, quantity: base.quantity, unit: base.unit, calories: '', protein: '', fat: '' };
+  });
+  ingredients.forEach((ing, i) => {
+    Object.entries(numericCols).forEach(([key, values]) => {
+      if (i < values.length) ing[key] = values[i];
     });
+  });
 
-  return { mealName, ingredients };
+  const gap = Object.values(numericCols).some((values) => values.length < nameLines.length);
+
+  return {
+    mealName,
+    ingredients,
+    note: gap
+      ? 'This table has several ingredients packed into one cell, so kcal/protein/fat were matched by position — double-check the amounts, especially toward the end of the list (items with no value, like seasoning, get skipped correctly, but worth a check).'
+      : null,
+  };
 }
 
 export default function Admin() {
@@ -180,7 +256,7 @@ export default function Admin() {
   }
 
   function handlePasteImport() {
-    const { mealName, ingredients: parsed } = parsePastedIngredients(pasteText);
+    const { mealName, ingredients: parsed, note } = parsePastedIngredients(pasteText);
     if (parsed.length === 0) {
       setPasteMsg("Couldn't find any rows — check the format below.");
       return;
@@ -194,7 +270,8 @@ export default function Admin() {
     setPasteText('');
     setPasteMsg(
       `Added ${parsed.length} ingredient${parsed.length === 1 ? '' : 's'}` +
-        (mealName ? ` and set the meal name to "${mealName}".` : '.')
+        (mealName ? ` and set the meal name to "${mealName}".` : '.') +
+        (note ? ` ${note}` : '')
     );
   }
 
