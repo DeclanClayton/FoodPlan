@@ -236,10 +236,37 @@ export default function Admin() {
     }
   }
 
+  // Editing the quantity scales calories/protein/fat by the same ratio, so if a recipe
+  // changes later (e.g. 2 pittas -> 1), the macros you already entered scale down with it
+  // instead of silently going stale. Only kicks in when both the old and new quantity are
+  // real numbers — first-time entry (starting from a blank quantity) is untouched.
   function updateIngredient(index, field, value) {
     setForm((prev) => {
       const ingredients = [...prev.ingredients];
-      ingredients[index] = { ...ingredients[index], [field]: value };
+      const current = ingredients[index];
+
+      if (field === 'quantity') {
+        const oldQty = parseFloat(current.quantity);
+        const newQty = parseFloat(value);
+        const canScale = Number.isFinite(oldQty) && oldQty > 0 && Number.isFinite(newQty) && newQty >= 0;
+
+        if (canScale) {
+          const scale = newQty / oldQty;
+          const scaled = { ...current, quantity: value };
+          ['calories', 'protein', 'fat'].forEach((key) => {
+            const num = parseFloat(current[key]);
+            if (Number.isFinite(num)) {
+              scaled[key] = String(Math.round(num * scale * 100) / 100);
+            }
+          });
+          ingredients[index] = scaled;
+        } else {
+          ingredients[index] = { ...current, quantity: value };
+        }
+      } else {
+        ingredients[index] = { ...current, [field]: value };
+      }
+
       return { ...prev, ingredients };
     });
   }
@@ -384,6 +411,9 @@ export default function Admin() {
 
         <div className="field">
           <span>Ingredients</span>
+          <p className="field-hint">
+            Changing Qty scales the kcal/protein/fat on that row to match.
+          </p>
           <div className="ingredient-rows">
             {form.ingredients.map((ing, i) => (
               <div className="ingredient-card" key={i}>
