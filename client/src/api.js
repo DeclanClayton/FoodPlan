@@ -31,4 +31,17 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mealIds }),
     }).then(handle),
+  getWeeklyPlan: () => fetch(`${BASE}/weekly-plan`).then(handle),
+  submitWeeklyPlan: (mealIds) =>
+    fetch(`${BASE}/weekly-plan/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mealIds }),
+    }).then(handle),
+  publishWeeklyPlan: (assignments) =>
+    fetch(`${BASE}/weekly-plan/publish`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assignments }),
+    }).then(handle),
 };

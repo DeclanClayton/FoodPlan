@@ -18,6 +18,39 @@ function rowToMeal(row) {
     description: row.description,
     instructions: row.instructions,
     ingredients: JSON.parse(row.ingredients || '[]'),
+    sundayPrep: row.sunday_prep || '',
+    midweekPrep: row.midweek_prep || '',
+    freezable: !!row.freezable,
+  };
+}
+
+const PLAN_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
+function getMealsByIds(ids) {
+  if (!ids.length) return new Map();
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT * FROM meals WHERE id IN (${placeholders})`).all(...ids);
+  return new Map(rows.map((row) => [row.id, rowToMeal(row)]));
+}
+
+function rowToPlan(row) {
+  const selectionIds = JSON.parse(row.selections || '[]');
+  const assignmentIds = JSON.parse(row.assignments || '{}');
+  const allIds = [...new Set([...selectionIds, ...Object.values(assignmentIds).filter(Boolean)])];
+  const mealsById = getMealsByIds(allIds);
+
+  const assignments = {};
+  for (const day of PLAN_DAYS) {
+    const mealId = assignmentIds[day];
+    assignments[day] = mealId && mealsById.has(mealId) ? mealsById.get(mealId) : null;
+  }
+
+  return {
+    status: row.status,
+    selections: selectionIds.filter((id) => mealsById.has(id)).map((id) => mealsById.get(id)),
+    assignments,
+    submittedAt: row.submitted_at,
+    publishedAt: row.published_at,
   };
 }
 
@@ -39,19 +72,22 @@ app.get('/api/meals/:id', (req, res) => {
 });
 
 app.post('/api/meals', (req, res) => {
-  const { name, category, description, instructions, ingredients } = req.body;
+  const { name, category, description, instructions, ingredients, sundayPrep, midweekPrep, freezable } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Name is required' });
 
   const stmt = db.prepare(`
-    INSERT INTO meals (name, category, description, instructions, ingredients, updated_at)
-    VALUES (?, ?, ?, ?, ?, datetime('now'))
+    INSERT INTO meals (name, category, description, instructions, ingredients, sunday_prep, midweek_prep, freezable, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `);
   const info = stmt.run(
     name.trim(),
     (category || 'Other').trim(),
     description || '',
     instructions || '',
-    JSON.stringify(ingredients || [])
+    JSON.stringify(ingredients || []),
+    sundayPrep || '',
+    midweekPrep || '',
+    freezable ? 1 : 0
   );
   const row = db.prepare('SELECT * FROM meals WHERE id = ?').get(info.lastInsertRowid);
   res.status(201).json(rowToMeal(row));
@@ -61,10 +97,11 @@ app.put('/api/meals/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM meals WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Meal not found' });
 
-  const { name, category, description, instructions, ingredients } = req.body;
+  const { name, category, description, instructions, ingredients, sundayPrep, midweekPrep, freezable } = req.body;
   db.prepare(`
     UPDATE meals
-    SET name = ?, category = ?, description = ?, instructions = ?, ingredients = ?, updated_at = datetime('now')
+    SET name = ?, category = ?, description = ?, instructions = ?, ingredients = ?,
+        sunday_prep = ?, midweek_prep = ?, freezable = ?, updated_at = datetime('now')
     WHERE id = ?
   `).run(
     (name ?? existing.name).trim(),
@@ -72,6 +109,9 @@ app.put('/api/meals/:id', (req, res) => {
     description ?? existing.description,
     instructions ?? existing.instructions,
     JSON.stringify(ingredients ?? JSON.parse(existing.ingredients)),
+    sundayPrep ?? existing.sunday_prep,
+    midweekPrep ?? existing.midweek_prep,
+    freezable === undefined ? existing.freezable : freezable ? 1 : 0,
     req.params.id
   );
 
@@ -83,6 +123,48 @@ app.delete('/api/meals/:id', (req, res) => {
   const info = db.prepare('DELETE FROM meals WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'Meal not found' });
   res.status(204).end();
+});
+
+// ---------- API: weekly plan ----------
+// A single "current plan" — submitting fresh picks always overwrites it (no history).
+// Saturday is intentionally excluded: it's the cheat-day, so it's never part of the plan.
+app.get('/api/weekly-plan', (req, res) => {
+  const row = db.prepare('SELECT * FROM weekly_plan WHERE id = 1').get();
+  res.json(rowToPlan(row));
+});
+
+app.post('/api/weekly-plan/submit', (req, res) => {
+  const { mealIds } = req.body;
+  if (!Array.isArray(mealIds) || mealIds.length === 0) {
+    return res.status(400).json({ error: 'mealIds array is required' });
+  }
+  db.prepare(`
+    UPDATE weekly_plan
+    SET status = 'submitted', selections = ?, assignments = '{}', submitted_at = datetime('now'), published_at = NULL
+    WHERE id = 1
+  `).run(JSON.stringify(mealIds));
+
+  const row = db.prepare('SELECT * FROM weekly_plan WHERE id = 1').get();
+  res.json(rowToPlan(row));
+});
+
+app.post('/api/weekly-plan/publish', (req, res) => {
+  const { assignments } = req.body;
+  if (!assignments || typeof assignments !== 'object') {
+    return res.status(400).json({ error: 'assignments object is required' });
+  }
+  const clean = {};
+  for (const day of PLAN_DAYS) {
+    if (assignments[day]) clean[day] = assignments[day];
+  }
+  db.prepare(`
+    UPDATE weekly_plan
+    SET status = 'published', assignments = ?, published_at = datetime('now')
+    WHERE id = 1
+  `).run(JSON.stringify(clean));
+
+  const row = db.prepare('SELECT * FROM weekly_plan WHERE id = 1').get();
+  res.json(rowToPlan(row));
 });
 
 // ---------- API: shopping list ----------

@@ -480,6 +480,18 @@ button {
   color: #9c957e;
 }
 
+.field--checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.field--checkbox input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--forest);
+}
+
 .remove-btn {
   background: none;
   border: 1px solid var(--line);
@@ -532,4 +544,138 @@ button {
   display: flex;
   gap: 14px;
   flex-shrink: 0;
+}
+
+/* ---------- weekly plan (admin) ---------- */
+
+.weekly-plan-admin {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 32px;
+}
+
+.weekly-plan-admin h2 {
+  font-size: 20px;
+  margin-bottom: 6px;
+}
+
+.plan-selections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.plan-selection-chip {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 14px;
+}
+
+.freezable-badge {
+  font-size: 12px;
+  color: var(--forest);
+  font-weight: 600;
+}
+
+.prep-hint {
+  font-size: 12px;
+  color: #9c957e;
+}
+
+.day-assign-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.day-assign-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.day-assign-name {
+  font-weight: 600;
+  font-size: 14px;
+  flex: 0 0 90px;
+}
+
+.day-assign-row select {
+  flex: 1;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  min-height: 42px;
+}
+
+.saturday-note {
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+/* ---------- weekly plan (user-facing) ---------- */
+
+.edit-picks-btn,
+.plan-next-btn,
+.cancel-picking-btn {
+  display: block;
+  margin: 16px auto 0;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 12px 20px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.calendar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.day-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+
+.day-card--cheat {
+  background: linear-gradient(135deg, rgba(201, 151, 43, 0.08), rgba(201, 151, 43, 0.02));
+  border-style: dashed;
+}
+
+.day-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.day-label {
+  font-family: 'Fraunces', serif;
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--forest-dark);
+}
+
+.day-meal-name {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 2px 0 6px;
 }

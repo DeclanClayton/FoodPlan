@@ -21,9 +21,42 @@ db.exec(`
     description TEXT DEFAULT '',
     instructions TEXT DEFAULT '',
     ingredients TEXT NOT NULL DEFAULT '[]',
+    sunday_prep TEXT DEFAULT '',
+    midweek_prep TEXT DEFAULT '',
+    freezable INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
   );
 `);
+
+// Lightweight migration: add any of the above columns that don't exist yet on a database
+// created before this version of the app (so existing deployments upgrade in place).
+const existingCols = new Set(db.prepare('PRAGMA table_info(meals)').all().map((c) => c.name));
+const wantedCols = {
+  sunday_prep: "TEXT DEFAULT ''",
+  midweek_prep: "TEXT DEFAULT ''",
+  freezable: 'INTEGER NOT NULL DEFAULT 0',
+};
+for (const [col, def] of Object.entries(wantedCols)) {
+  if (!existingCols.has(col)) {
+    db.exec(`ALTER TABLE meals ADD COLUMN ${col} ${def};`);
+  }
+}
+
+// Singleton row holding whatever week is currently being planned. Submitting fresh
+// selections always overwrites this — there's no history, just "the current plan."
+db.exec(`
+  CREATE TABLE IF NOT EXISTS weekly_plan (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    status TEXT NOT NULL DEFAULT 'none',
+    selections TEXT NOT NULL DEFAULT '[]',
+    assignments TEXT NOT NULL DEFAULT '{}',
+    submitted_at TEXT,
+    published_at TEXT
+  );
+`);
+db.prepare(
+  `INSERT OR IGNORE INTO weekly_plan (id, status, selections, assignments) VALUES (1, 'none', '[]', '{}')`
+).run();
 
 module.exports = db;

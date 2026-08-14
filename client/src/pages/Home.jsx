@@ -1,23 +1,36 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 
+const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+
 export default function Home() {
   const [meals, setMeals] = useState([]);
+  const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
   const [selected, setSelected] = useState(() => new Set());
   const [expanded, setExpanded] = useState(() => new Set());
-  const [list, setList] = useState(null); // shopping list result
+  const [submitting, setSubmitting] = useState(false);
+  const [planningNext, setPlanningNext] = useState(false);
+
+  const [list, setList] = useState(null);
   const [listLoading, setListLoading] = useState(false);
   const [checkedOff, setCheckedOff] = useState(() => new Set());
 
-  useEffect(() => {
-    api
-      .getMeals()
-      .then(setMeals)
+  function loadAll() {
+    setLoading(true);
+    setError('');
+    Promise.all([api.getMeals(), api.getWeeklyPlan()])
+      .then(([mealsData, planData]) => {
+        setMeals(mealsData);
+        setPlan(planData);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, []);
+  }
+
+  useEffect(loadAll, []);
 
   function mealMacros(meal) {
     const totals = meal.ingredients.reduce(
@@ -74,12 +87,36 @@ export default function Home() {
     });
   }
 
-  async function buildList() {
+  function startPicking(prefillFromPlan) {
+    if (prefillFromPlan && plan?.selections?.length) {
+      setSelected(new Set(plan.selections.map((m) => m.id)));
+    } else {
+      setSelected(new Set());
+    }
+    setPlanningNext(true);
+  }
+
+  async function handleSubmitWeek() {
     if (selected.size === 0) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const updated = await api.submitWeeklyPlan(Array.from(selected));
+      setPlan(updated);
+      setPlanningNext(false);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function buildListFor(mealIds) {
+    if (!mealIds.length) return;
     setListLoading(true);
     setError('');
     try {
-      const result = await api.getShoppingList(Array.from(selected));
+      const result = await api.getShoppingList(mealIds);
       setList(result);
       setCheckedOff(new Set());
     } catch (e) {
@@ -108,19 +145,181 @@ export default function Home() {
     );
   }
 
+  if (loading) {
+    return (
+      <div className="page">
+        <p className="muted center">Loading…</p>
+      </div>
+    );
+  }
+
+  if (error && !plan) {
+    return (
+      <div className="page">
+        <p className="error center">{error}</p>
+      </div>
+    );
+  }
+
+  const showPicker = planningNext || plan?.status === 'none';
+
+  if (showPicker) {
+    return (
+      <MealPicker
+        grouped={grouped}
+        meals={meals}
+        selected={selected}
+        toggleSelect={toggleSelect}
+        expanded={expanded}
+        toggleExpand={toggleExpand}
+        mealMacros={mealMacros}
+        selectedMacros={selectedMacros}
+        onSubmit={handleSubmitWeek}
+        submitting={submitting}
+        error={error}
+        onCancel={plan && plan.status !== 'none' ? () => setPlanningNext(false) : null}
+      />
+    );
+  }
+
+  if (plan.status === 'submitted') {
+    return (
+      <div className="page">
+        <header className="hero">
+          <p className="eyebrow">Submitted</p>
+          <h1>Thanks!</h1>
+        </header>
+        <p className="muted center">
+          Your picks are in — hang tight while the week gets sorted into a plan. Check back soon.
+        </p>
+        {error && <p className="error center">{error}</p>}
+        <div className="plan-selections">
+          {plan.selections.map((meal) => (
+            <div key={meal.id} className="plan-selection-chip">
+              <span>{meal.name}</span>
+            </div>
+          ))}
+        </div>
+        <button type="button" className="secondary-btn edit-picks-btn" onClick={() => startPicking(true)}>
+          Edit my picks
+        </button>
+      </div>
+    );
+  }
+
+  // plan.status === 'published'
+  const assignedIds = DAYS.map((d) => plan.assignments[d]?.id).filter(Boolean);
+
   return (
     <div className="page">
       <header className="hero">
-        <p className="eyebrow">Pick your meals</p>
+        <p className="eyebrow">This week</p>
         <h1>Pantry &amp; Plan</h1>
       </header>
 
-      {loading && <p className="muted center">Loading meals…</p>}
       {error && <p className="error center">{error}</p>}
-      {!loading && meals.length === 0 && !error && (
-        <p className="muted center">
-          No meals yet. Ask whoever manages the plan to add some.
-        </p>
+
+      <div className="calendar">
+        {DAYS.map((day) => {
+          const meal = plan.assignments[day];
+          const isExpanded = meal && expanded.has(meal.id);
+          return (
+            <div key={day} className="day-card">
+              <div className="day-card-header">
+                <span className="day-label">{day}</span>
+                {meal?.freezable && <span className="freezable-badge">❄ freezable</span>}
+              </div>
+              {meal ? (
+                <>
+                  <p className="day-meal-name">{meal.name}</p>
+                  <button type="button" className="expand-toggle" onClick={() => toggleExpand(meal.id)}>
+                    {isExpanded ? 'Hide recipe' : 'View recipe'}
+                  </button>
+                  {isExpanded && (
+                    <div className="recipe-detail">
+                      {meal.ingredients?.length > 0 && (
+                        <>
+                          <h3>Ingredients</h3>
+                          <ul className="ingredient-list">
+                            {meal.ingredients.map((ing, i) => (
+                              <li key={i}>
+                                {ing.quantity ? `${ing.quantity} ` : ''}
+                                {ing.unit ? `${ing.unit} ` : ''}
+                                {ing.name}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                      {meal.instructions && (
+                        <>
+                          <h3>Recipe</h3>
+                          <p className="instructions">{meal.instructions}</p>
+                        </>
+                      )}
+                      {meal.sundayPrep && <p className="prep-hint">Sunday prep: {meal.sundayPrep}</p>}
+                      {meal.midweekPrep && <p className="prep-hint">Midweek prep: {meal.midweekPrep}</p>}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="muted">Not assigned yet</p>
+              )}
+            </div>
+          );
+        })}
+        <div className="day-card day-card--cheat">
+          <div className="day-card-header">
+            <span className="day-label">Saturday</span>
+          </div>
+          <p className="muted">🎉 Cheat day — no plan needed</p>
+        </div>
+      </div>
+
+      <div className="sticky-bar">
+        {assignedIds.length > 0 && (
+          <button
+            type="button"
+            className="primary-btn"
+            onClick={() => buildListFor(assignedIds)}
+            disabled={listLoading}
+          >
+            {listLoading ? 'Building…' : 'Build shopping list for this week'}
+          </button>
+        )}
+        <button type="button" className="secondary-btn plan-next-btn" onClick={() => startPicking(false)}>
+          Plan next week
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MealPicker({
+  grouped,
+  meals,
+  selected,
+  toggleSelect,
+  expanded,
+  toggleExpand,
+  mealMacros,
+  selectedMacros,
+  onSubmit,
+  submitting,
+  error,
+  onCancel,
+}) {
+  return (
+    <div className="page">
+      <header className="hero">
+        <p className="eyebrow">Pick your meals for next week</p>
+        <h1>Pantry &amp; Plan</h1>
+        <p className="muted">Saturday's your cheat day — no need to plan for it.</p>
+      </header>
+
+      {error && <p className="error center">{error}</p>}
+      {meals.length === 0 && (
+        <p className="muted center">No meals yet. Ask whoever manages the plan to add some.</p>
       )}
 
       <div className="meal-groups">
@@ -133,11 +332,7 @@ export default function Home() {
                 const isExpanded = expanded.has(meal.id);
                 return (
                   <li key={meal.id} className={`meal-card ${isSelected ? 'is-selected' : ''}`}>
-                    <button
-                      type="button"
-                      className="meal-row"
-                      onClick={() => toggleSelect(meal.id)}
-                    >
+                    <button type="button" className="meal-row" onClick={() => toggleSelect(meal.id)}>
                       <span className={`checkbox ${isSelected ? 'checked' : ''}`} aria-hidden="true">
                         {isSelected && '✓'}
                       </span>
@@ -145,22 +340,15 @@ export default function Home() {
                         <span className="meal-name-row">
                           <span className="meal-name">{meal.name}</span>
                           {mealMacros(meal) && (
-                            <span className="meal-cals">
-                              {Math.round(mealMacros(meal).calories)} kcal
-                            </span>
+                            <span className="meal-cals">{Math.round(mealMacros(meal).calories)} kcal</span>
                           )}
+                          {meal.freezable && <span className="freezable-badge">❄</span>}
                         </span>
-                        {meal.description && (
-                          <span className="meal-desc">{meal.description}</span>
-                        )}
+                        {meal.description && <span className="meal-desc">{meal.description}</span>}
                       </span>
                     </button>
                     {(meal.instructions || meal.ingredients.length > 0) && (
-                      <button
-                        type="button"
-                        className="expand-toggle"
-                        onClick={() => toggleExpand(meal.id)}
-                      >
+                      <button type="button" className="expand-toggle" onClick={() => toggleExpand(meal.id)}>
                         {isExpanded ? 'Hide recipe' : 'View recipe'}
                       </button>
                     )}
@@ -194,6 +382,8 @@ export default function Home() {
                             <p className="instructions">{meal.instructions}</p>
                           </>
                         )}
+                        {meal.sundayPrep && <p className="prep-hint">Sunday prep: {meal.sundayPrep}</p>}
+                        {meal.midweekPrep && <p className="prep-hint">Midweek prep: {meal.midweekPrep}</p>}
                       </div>
                     )}
                   </li>
@@ -214,11 +404,16 @@ export default function Home() {
               {' '}for selected meals
             </p>
           )}
-          <button type="button" className="primary-btn" onClick={buildList} disabled={listLoading}>
-            {listLoading
-              ? 'Building…'
-              : `Build shopping list (${selected.size} meal${selected.size === 1 ? '' : 's'})`}
+          <button type="button" className="primary-btn" onClick={onSubmit} disabled={submitting}>
+            {submitting
+              ? 'Submitting…'
+              : `Submit for the week (${selected.size} meal${selected.size === 1 ? '' : 's'})`}
           </button>
+          {onCancel && (
+            <button type="button" className="secondary-btn cancel-picking-btn" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -230,7 +425,7 @@ function ShoppingList({ list, checkedOff, onToggle, onBack }) {
     <div className="page">
       <header className="hero hero--compact">
         <button type="button" className="back-btn" onClick={onBack}>
-          ‹ Back to meals
+          ‹ Back
         </button>
         <p className="eyebrow">Shopping list</p>
         <h1>The Ticket</h1>

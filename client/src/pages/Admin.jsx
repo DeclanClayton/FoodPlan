@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import WeeklyPlanAdmin from './WeeklyPlanAdmin.jsx';
 
 const emptyIngredient = () => ({ name: '', quantity: '', unit: '', calories: '', protein: '', fat: '' });
 const emptyForm = () => ({
@@ -8,6 +9,9 @@ const emptyForm = () => ({
   description: '',
   instructions: '',
   ingredients: [emptyIngredient()],
+  sundayPrep: '',
+  midweekPrep: '',
+  freezable: false,
 });
 
 // Parses text pasted from a spreadsheet or a Word table into ingredient rows.
@@ -36,13 +40,48 @@ function detectHeaderColumns(headerRow) {
 // Pulls a leading quantity + unit off an ingredient string like "200g Chicken breast"
 // or "1/2 cup Rice", leaving just the ingredient name. Falls back to no quantity/unit
 // if nothing matches.
+// Unicode fraction glyphs — Word autocorrects "1/4" into "¼" etc., which plain number
+// parsing can't read at all. Converts those (and plain "1/2" or "1 1/2" text) to a decimal
+// string, since quantities need to be real numbers for shopping-list math and qty scaling.
+const UNICODE_FRACTIONS = {
+  '¼': 0.25, '½': 0.5, '¾': 0.75,
+  '⅓': 1 / 3, '⅔': 2 / 3,
+  '⅕': 0.2, '⅖': 0.4, '⅗': 0.6, '⅘': 0.8,
+  '⅙': 1 / 6, '⅚': 5 / 6,
+  '⅛': 0.125, '⅜': 0.375, '⅝': 0.625, '⅞': 0.875,
+};
+const FRACTION_CHAR_CLASS = Object.keys(UNICODE_FRACTIONS).join('');
+
+function toDecimalQuantity(raw) {
+  const text = (raw ?? '').toString().trim();
+  if (text === '') return text;
+
+  const fracChar = [...text].find((ch) => UNICODE_FRACTIONS[ch] !== undefined);
+  if (fracChar) {
+    const wholePart = text.slice(0, text.indexOf(fracChar)).trim();
+    const whole = wholePart === '' ? 0 : parseFloat(wholePart) || 0;
+    return String(Math.round((whole + UNICODE_FRACTIONS[fracChar]) * 1000) / 1000);
+  }
+
+  const fracMatch = text.match(/^(\d+\s+)?(\d+)\/(\d+)$/);
+  if (fracMatch) {
+    const whole = fracMatch[1] ? parseFloat(fracMatch[1]) : 0;
+    const num = parseFloat(fracMatch[2]);
+    const den = parseFloat(fracMatch[3]);
+    if (den) return String(Math.round((whole + num / den) * 1000) / 1000);
+  }
+
+  return text;
+}
+
 function splitQuantityFromName(raw) {
   const text = (raw || '').trim();
   const unitPattern =
     'g|kg|mg|ml|l|tsp|tbsp|tbs|cup|cups|oz|lb|lbs|clove|cloves|slice|slices|piece|pieces|pinch|can|cans|tin|tins|bunch|stick|sticks|handful';
-  const match = text.match(new RegExp(`^([\\d.]+(?:\\/[\\d.]+)?)\\s*(${unitPattern})?\\s+(.+)$`, 'i'));
+  const qtyPattern = `(?:\\d+\\s+)?\\d+\\/\\d+|\\d*[${FRACTION_CHAR_CLASS}]|\\d+(?:\\.\\d+)?`;
+  const match = text.match(new RegExp(`^(${qtyPattern})\\s*(${unitPattern})?\\s+(.+)$`, 'i'));
   if (match) {
-    return { quantity: match[1], unit: match[2] || '', name: match[3] };
+    return { quantity: toDecimalQuantity(match[1]), unit: match[2] || '', name: match[3] };
   }
   return { quantity: '', unit: '', name: text };
 }
@@ -216,6 +255,9 @@ export default function Admin() {
       description: meal.description,
       instructions: meal.instructions,
       ingredients: meal.ingredients.length ? meal.ingredients : [emptyIngredient()],
+      sundayPrep: meal.sundayPrep || '',
+      midweekPrep: meal.midweekPrep || '',
+      freezable: !!meal.freezable,
     });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -246,8 +288,8 @@ export default function Admin() {
       const current = ingredients[index];
 
       if (field === 'quantity') {
-        const oldQty = parseFloat(current.quantity);
-        const newQty = parseFloat(value);
+        const oldQty = parseFloat(toDecimalQuantity(current.quantity));
+        const newQty = parseFloat(toDecimalQuantity(value));
         const canScale = Number.isFinite(oldQty) && oldQty > 0 && Number.isFinite(newQty) && newQty >= 0;
 
         if (canScale) {
@@ -317,7 +359,7 @@ export default function Admin() {
         .filter((ing) => ing.name.trim())
         .map((ing) => ({
           name: ing.name.trim(),
-          quantity: ing.quantity === '' ? null : Number(ing.quantity),
+          quantity: ing.quantity === '' ? null : Number(toDecimalQuantity(ing.quantity)),
           unit: ing.unit.trim(),
           calories: ing.calories === '' ? null : Number(ing.calories),
           protein: ing.protein === '' ? null : Number(ing.protein),
@@ -347,6 +389,8 @@ export default function Admin() {
         <p className="eyebrow">Admin</p>
         <h1>Manage Meals</h1>
       </header>
+
+      <WeeklyPlanAdmin />
 
       {error && <p className="error center">{error}</p>}
 
@@ -490,6 +534,35 @@ export default function Admin() {
             onChange={(e) => setForm((p) => ({ ...p, instructions: e.target.value }))}
             placeholder="Steps to cook this meal"
           />
+        </label>
+
+        <label className="field">
+          <span>Sunday prep</span>
+          <textarea
+            rows={2}
+            value={form.sundayPrep}
+            onChange={(e) => setForm((p) => ({ ...p, sundayPrep: e.target.value }))}
+            placeholder="Anything to prep on Sunday for this meal (e.g. marinate, batch-cook a base)"
+          />
+        </label>
+
+        <label className="field">
+          <span>Midweek prep</span>
+          <textarea
+            rows={2}
+            value={form.midweekPrep}
+            onChange={(e) => setForm((p) => ({ ...p, midweekPrep: e.target.value }))}
+            placeholder="Any prep needed partway through the week (e.g. defrost, chop the night before)"
+          />
+        </label>
+
+        <label className="field field--checkbox">
+          <input
+            type="checkbox"
+            checked={form.freezable}
+            onChange={(e) => setForm((p) => ({ ...p, freezable: e.target.checked }))}
+          />
+          <span>Freezable</span>
         </label>
 
         <div className="form-actions">
